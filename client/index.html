@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Crowns & Ruins</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<div id="loading">Загрузка…</div>
+
+<div id="auth" style="display:none">
+  <form id="auth-form" class="auth-box">
+    <h1>Crowns &amp; Ruins</h1>
+    <p class="muted">Средневековая стратегия. Строй город, собирай героев, бей боссов в общем мире.</p>
+    <input id="auth-user" placeholder="Имя (3–16 символов)" autocomplete="username" required>
+    <input id="auth-pass" type="password" placeholder="Пароль" autocomplete="current-password" required>
+    <input id="auth-city" placeholder="Название города (необязательно)" style="display:none">
+    <div id="auth-error" class="bad"></div>
+    <button id="auth-submit" class="btn primary" type="submit">Войти</button>
+    <a href="#" id="auth-toggle">Нет аккаунта? Регистрация</a>
+  </form>
+</div>
+
+<div id="game" style="display:none">
+  <header id="top">
+    <div id="resbar"></div>
+    <div id="topinfo"><span id="cityname"></span><span id="power"></span><span id="cap" class="muted small"></span></div>
+  </header>
+  <main id="stage">
+    <canvas id="canvas-city"></canvas>
+    <canvas id="canvas-world" style="display:none"></canvas>
+    <button id="btn-center" title="Центрировать">⌖</button>
+    <aside id="panel">
+      <div id="panel-head"><span id="panel-title"></span><button id="panel-close">✕</button></div>
+      <div id="panel-body"></div>
+    </aside>
+  </main>
+  <nav id="nav">
+    <button data-scene="city">🏰<span>Город</span></button>
+    <button data-scene="world">🗺<span>Мир</span></button>
+    <button data-scene="heroes">🛡<span>Герои</span></button>
+    <button data-scene="army">⚔<span>Армия</span></button>
+    <button data-scene="menu">☰<span>Ещё</span></button>
+  </nav>
+</div>
+<div id="toasts"></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "crvs",
+  "version": "0.1.0",
+  "description": "Crowns & Ruins — браузерная средневековая стратегия (город, герои, боссы, общий мир)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "dev": "node --no-warnings --watch server/index.js",
+    "reset-db": "rm -f data/game.db && echo 'db removed'"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "license": "MIT"
+}

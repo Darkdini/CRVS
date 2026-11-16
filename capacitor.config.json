@@ -1,0 +1,8 @@
+{
+  "appId": "ru.crvs.game",
+  "appName": "Crowns & Ruins",
+  "webDir": "client",
+  "bundledWebRuntime": false,
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": false, "backgroundColor": "#17120e" }
+}
