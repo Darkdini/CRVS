@@ -7,6 +7,8 @@ const G = require('./gamedata');
 const game = require('./game');
 const battle = require('./battle');
 const world = require('./world');
+const marches = require('./marches');
+const alliances = require('./alliances');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -21,6 +23,8 @@ app.use((req, res, next) => { // CORS для APK/WebView
 app.use(express.static(path.join(__dirname, '..', 'client')));
 
 world.generateWorld();
+world.spawnMonsters();
+setInterval(() => { try { marches.process(); world.respawnMonsters(); } catch (e) { console.error(e); } }, 3000);
 
 // ---------- auth ----------
 function hashPassword(pw, salt) { return crypto.scryptSync(pw, salt, 32).toString('hex'); }
@@ -90,12 +94,15 @@ app.get('/api/gamedata', (req, res) => {
         production: G.buildingProduction(k, i + 1), capacity: G.buildingCapacity(k, i + 1), defense: G.buildingDefense(k, i + 1),
       })) };
   }
+  const techs = {};
+  for (const k in G.TECHS) techs[k] = { ...G.TECHS[k], levels: Array.from({ length: G.TECHS[k].max }, (_, i) => ({ cost: G.techCost(k, i + 1), time: G.techTime(k, i + 1) })) };
   res.json({ ok: true, resources: G.RESOURCES, citySize: G.CITY_SIZE, buildings, units: G.UNITS, heroClasses: G.HERO_CLASSES,
-    bosses: G.BOSSES, nodes: G.NODES, world: G.WORLD, heroCost: [0, 1, 2, 3, 4].map(G.HERO_COST) });
+    bosses: G.BOSSES, nodes: G.NODES, world: G.WORLD, heroCost: [0, 1, 2, 3, 4].map(G.HERO_COST), monsters: G.MONSTERS, techs,
+    itemSlots: G.ITEM_SLOTS, rarities: G.RARITIES, questsTotal: G.QUESTS.length });
 });
 
 // ---------- city ----------
-app.get('/api/state', auth, wrap((req, res) => ok(res, { state: game.state(req.pid) })));
+app.get('/api/state', auth, wrap((req, res) => { marches.process(); ok(res, { state: game.state(req.pid) }); }));
 app.post('/api/build', auth, wrap((req, res) => ok(res, { state: game.build(req.pid, req.body.type, +req.body.x, +req.body.y) })));
 app.post('/api/upgrade', auth, wrap((req, res) => ok(res, { state: game.upgrade(req.pid, +req.body.id) })));
 app.post('/api/demolish', auth, wrap((req, res) => ok(res, { state: game.demolish(req.pid, +req.body.id) })));
@@ -111,180 +118,73 @@ app.post('/api/rename', auth, wrap((req, res) => {
 
 // ---------- world ----------
 app.get('/api/world', auth, wrap((req, res) => {
+  marches.process();
+  world.respawnMonsters();
   const tiles = db.prepare('SELECT x,y,terrain,object FROM world_tiles').all();
-  const players = db.prepare('SELECT id,username,city_name,world_x,world_y FROM players').all();
+  const players = db.prepare('SELECT id,username,city_name,world_x,world_y,alliance_id FROM players').all();
+  const alliances = db.prepare('SELECT id,tag FROM alliances').all();
   const t = game.now();
-  const bosses = db.prepare('SELECT * FROM bosses').all().map(b => ({
-    ...b, ...G.BOSSES[b.key], maxHp: G.BOSSES[b.key].hp, alive: b.dead_until <= t,
-  }));
+  const bosses = db.prepare('SELECT * FROM bosses').all().map(b => ({ ...b, ...G.BOSSES[b.key], maxHp: G.BOSSES[b.key].hp, alive: b.dead_until <= t }));
+  const monsters = db.prepare('SELECT id,x,y,type,level,hp FROM monsters WHERE dead_until=0').all().map(m => ({ ...m, name: G.MONSTERS[m.type].name, maxHp: G.monsterStats(m.level).hp }));
   const cooldowns = db.prepare('SELECT x,y,ready_at FROM node_cooldowns WHERE player_id=? AND ready_at>?').all(req.pid, t);
-  ok(res, { now: t, size: G.WORLD.size, tiles, players, bosses, cooldowns });
+  // чужие походы видны всем (как в большом мире): только позиции
+  const others = db.prepare('SELECT m.id, m.player_id, m.kind, m.target_x, m.target_y, m.status, m.depart_at, m.arrive_at, m.return_at, m.travel, p.world_x, p.world_y, p.username FROM marches m JOIN players p ON p.id=m.player_id WHERE m.player_id<>?').all(req.pid);
+  ok(res, { now: t, size: G.WORLD.size, tiles, players, alliances, bosses, monsters, cooldowns, others });
 }));
 
-function pickArmy(pid, wanted) {
-  const have = game.getUnits(pid);
-  const army = {};
-  for (const t in wanted || {}) {
-    const n = Math.floor(Number(wanted[t]));
-    if (!G.UNITS[t] || !(n > 0)) continue;
-    army[t] = Math.min(n, have[t] || 0);
-  }
-  return army;
-}
-function pickHeroes(pid, ids) {
-  const all = game.getHeroes(pid);
-  const t = game.now();
-  return all.filter(h => (ids || []).map(Number).includes(h.id) && h.injured_until <= t);
-}
-function removeUnits(pid, lost) {
-  for (const t in lost) db.prepare('UPDATE units SET count=MAX(0,count-?) WHERE player_id=? AND type=?').run(lost[t], pid, t);
-}
-const fmtRes = (r) => Object.entries(r).map(([k, v]) => `${k}: ${v}`).join(', ');
-const fmtArmy = (a) => Object.entries(a).map(([k, v]) => `${G.UNITS[k].name} ×${v}`).join(', ') || 'без войск';
-
-app.post('/api/boss/attack', auth, wrap((req, res) => {
-  const pid = req.pid;
-  const { bossKey, army: wantedArmy, heroIds } = req.body || {};
-  const bossDef = G.BOSSES[bossKey];
-  const boss = db.prepare('SELECT * FROM bosses WHERE key=?').get(bossKey);
-  if (!bossDef || !boss) throw new Error('Нет такого босса');
-  const t = game.now();
-  if (boss.dead_until > t) throw new Error('Босс ещё не возродился');
-  game.tick(pid);
-  const army = pickArmy(pid, wantedArmy);
-  const heroes = pickHeroes(pid, heroIds);
-  const total = Object.values(army).reduce((a, b) => a + b, 0);
-  if (total === 0 && heroes.length === 0) throw new Error('Выбери войска или героев');
-  const bs = game.getBuildings(pid);
-  let atkMul = game.atkBonus(bs);
-  if (heroes.some(h => h.class === 'mage')) atkMul *= 1.3;
-  const a = battle.armyStats(army, heroes, atkMul);
-  const b = { atk: bossDef.atk, def: bossDef.def, hp: boss.hp };
-  const sim = battle.simulate(a, b, 8);
-  const lossRatio = a.hp > 0 ? 1 - sim.aLeft / a.hp : 0;
-  const lost = battle.applyLosses(army, lossRatio);
-  removeUnits(pid, lost);
-  // герои: ранение, если потеряли >60%
-  if (lossRatio > 0.6) for (const h of heroes) db.prepare('UPDATE heroes SET injured_until=? WHERE id=?').run(t + 300, h.id);
-  db.prepare('INSERT INTO boss_damage (boss_key,player_id,damage) VALUES (?,?,?) ON CONFLICT(boss_key,player_id) DO UPDATE SET damage=damage+excluded.damage')
-    .run(bossKey, pid, sim.aDamageDealt);
-  const xpGain = Math.floor(bossDef.xp * Math.min(1, sim.aDamageDealt / bossDef.hp) + 20);
-  const levelUps = [];
-  for (const h of heroes) { const ups = game.addHeroXp(h.id, xpGain); if (ups.length) levelUps.push(`${h.name} → ${ups[ups.length - 1]} ур.`); }
-  let reward = {}, killed = false;
-  const newHp = boss.hp - sim.aDamageDealt;
-  if (newHp <= 0) {
-    killed = true;
-    const me = game.getPlayer(pid);
-    db.prepare('UPDATE bosses SET hp=?, dead_until=?, kills=kills+1, last_killer=? WHERE key=?').run(bossDef.hp, t + bossDef.respawn, me.username, bossKey);
-    // награда всем, кто бил: пропорционально урону, добивший — x1.5
-    const dmg = db.prepare('SELECT player_id, damage FROM boss_damage WHERE boss_key=?').all(bossKey);
-    const sum = dmg.reduce((s, d) => s + d.damage, 0) || 1;
-    for (const d of dmg) {
-      const share = Math.min(1, d.damage / sum) * (d.player_id === pid ? 1.5 : 1);
-      const r = {};
-      for (const k in bossDef.reward) r[k] = Math.max(1, Math.floor(bossDef.reward[k] * share));
-      if (heroes.some(h => h.class === 'rogue') && d.player_id === pid) for (const k in r) r[k] = Math.floor(r[k] * 1.25);
-      game.give(d.player_id, r);
-      if (d.player_id === pid) reward = r;
-      else game.addReport(d.player_id, 'boss', `${bossDef.name} повержен`, `${me.username} добил босса. Ваша доля за урон: ${fmtRes(r)}.`);
-    }
-    db.prepare('DELETE FROM boss_damage WHERE boss_key=?').run(bossKey);
-    db.prepare('INSERT INTO chat (player_id,username,text,created_at) VALUES (0,?,?,?)').run('Герольд', `${me.username} сразил босса «${bossDef.name}»!`, t);
-  } else {
-    db.prepare('UPDATE bosses SET hp=? WHERE key=?').run(newHp, bossKey);
-  }
-  const title = killed ? `Босс ${bossDef.name} повержен!` : `Бой с ${bossDef.name}`;
-  const body = `Нанесено урона: ${sim.aDamageDealt}. Потери: ${fmtArmy(lost)}. Опыт героям: +${xpGain}.` + (killed ? ` Награда: ${fmtRes(reward)}.` : '') + (levelUps.length ? ' ' + levelUps.join(', ') : '');
-  game.addReport(pid, 'boss', title, body);
-  ok(res, { result: { killed, damage: sim.aDamageDealt, bossHpLeft: Math.max(0, newHp), bossMaxHp: bossDef.hp, lost, reward, xpGain, levelUps, log: sim.log, win: sim.win }, state: game.state(pid) });
+app.post('/api/march', auth, wrap((req, res) => {
+  const { kind, x, y, army, heroIds } = req.body || {};
+  ok(res, { state: marches.send(req.pid, kind, x, y, army, heroIds) });
+}));
+app.post('/api/march/recall', auth, wrap((req, res) => ok(res, { state: marches.recall(req.pid, +req.body.id) })));
+app.get('/api/march/preview', auth, wrap((req, res) => {
+  const me = game.getPlayer(req.pid);
+  const d = marches.dist(me.world_x, me.world_y, +req.query.x, +req.query.y);
+  const army = {}; try { Object.assign(army, JSON.parse(req.query.army || '{}')); } catch (e) { }
+  const techs = game.getTechs(req.pid);
+  ok(res, { dist: d, travel: marches.travelTime(d, Object.keys(army).length ? army : { scout: 1 }, techs), carry: marches.armyCarry(army, game.carryBonus(techs)) });
 }));
 
-app.post('/api/node/gather', auth, wrap((req, res) => {
-  const pid = req.pid;
-  const x = +req.body.x, y = +req.body.y;
-  const tile = db.prepare('SELECT * FROM world_tiles WHERE x=? AND y=?').get(x, y);
-  if (!tile || !tile.object || !tile.object.startsWith('node:')) throw new Error('Здесь нечего собирать');
-  const node = G.NODES[tile.object.slice(5)];
-  const t = game.now();
-  const cd = db.prepare('SELECT ready_at FROM node_cooldowns WHERE x=? AND y=? AND player_id=?').get(x, y, pid);
-  if (cd && cd.ready_at > t) throw new Error(`Точка истощена, ждать ${Math.ceil((cd.ready_at - t) / 60)} мин`);
-  game.tick(pid);
-  const units = game.getUnits(pid);
-  const carriers = Object.values(units).reduce((a, b) => a + b, 0);
-  if (carriers < 5) throw new Error('Нужно хотя бы 5 воинов для сбора');
-  const me = game.getPlayer(pid);
-  const dist = Math.abs(me.world_x - x) + Math.abs(me.world_y - y);
-  const amount = Math.floor(node.amount * Math.min(2, carriers / 20 + 0.5) * Math.max(0.5, 1 - dist / 120));
-  game.give(pid, { [node.resource]: amount });
-  db.prepare('INSERT INTO node_cooldowns (x,y,player_id,ready_at) VALUES (?,?,?,?) ON CONFLICT(x,y,player_id) DO UPDATE SET ready_at=excluded.ready_at')
-    .run(x, y, pid, t + node.cooldown);
-  game.addReport(pid, 'gather', `Сбор: ${node.name}`, `Собрано ${node.resource}: ${amount}.`);
-  ok(res, { result: { resource: node.resource, amount }, state: game.state(pid) });
-}));
+// ---------- герои/предметы/академия/госпиталь/задания ----------
+app.post('/api/item/equip', auth, wrap((req, res) => ok(res, { state: game.equip(req.pid, req.body.itemId, req.body.heroId) })));
+app.post('/api/item/sell', auth, wrap((req, res) => ok(res, { state: game.sellItem(req.pid, req.body.itemId) })));
+app.post('/api/research', auth, wrap((req, res) => ok(res, { state: game.research(req.pid, req.body.tech) })));
+app.post('/api/heal', auth, wrap((req, res) => ok(res, { state: game.heal(req.pid, req.body.type, req.body.count) })));
+app.post('/api/quest/claim', auth, wrap((req, res) => ok(res, { state: game.claimQuest(req.pid, req.body.id) })));
 
-app.post('/api/player/attack', auth, wrap((req, res) => {
-  const pid = req.pid;
-  const { targetId, army: wantedArmy, heroIds } = req.body || {};
-  const target = game.getPlayer(+targetId);
-  if (!target || target.id === pid) throw new Error('Неверная цель');
-  const t = game.now();
-  const me = game.getPlayer(pid);
-  if (me.last_attack_at + 120 > t) throw new Error('Войска отдыхают, подожди пару минут');
-  if (target.attacked_at + 600 > t) throw new Error('Город недавно атаковали — щит');
-  if (target.created_at + 3600 * 24 > t) throw new Error('У новичка щит на сутки');
-  game.tick(pid); game.tick(target.id);
-  const army = pickArmy(pid, wantedArmy);
-  const heroes = pickHeroes(pid, heroIds);
-  if (Object.values(army).reduce((a, b) => a + b, 0) === 0) throw new Error('Нужны войска');
-  const a = battle.armyStats(army, heroes, game.atkBonus(game.getBuildings(pid)));
-  const tb = game.getBuildings(target.id);
-  const tArmy = game.getUnits(target.id);
-  const tHeroes = game.getHeroes(target.id).filter(h => h.injured_until <= t);
-  const d = battle.armyStats(tArmy, tHeroes, game.atkBonus(tb));
-  const wallDef = game.cityDefense(tb);
-  d.def += wallDef; d.hp += wallDef * 5;
-  const sim = battle.simulate(a, d, 10);
-  const myLoss = a.hp > 0 ? 1 - sim.aLeft / a.hp : 0;
-  const theirLoss = d.hp > 0 ? 1 - sim.bLeft / d.hp : 0;
-  const lost = battle.applyLosses(army, myLoss); removeUnits(pid, lost);
-  const tLost = battle.applyLosses(tArmy, theirLoss * 0.8); removeUnits(target.id, tLost);
-  let loot = {};
-  if (sim.win) {
-    const pct = 0.15 * (heroes.some(h => h.class === 'rogue') ? 1.25 : 1);
-    const cap = Object.values(army).reduce((s, n) => s + n * 30, 0);
-    let carry = cap;
-    for (const k of ['gold', 'iron', 'stone', 'wood', 'food']) {
-      const amt = Math.min(Math.floor(target[k] * pct), carry);
-      if (amt > 0) { loot[k] = amt; carry -= amt; }
-    }
-    game.pay(target.id, loot); game.give(pid, loot);
-  }
-  for (const h of heroes) game.addHeroXp(h.id, 40 + (sim.win ? 60 : 0));
-  db.prepare('UPDATE players SET last_attack_at=? WHERE id=?').run(t, pid);
-  db.prepare('UPDATE players SET attacked_at=? WHERE id=?').run(t, target.id);
-  game.addReport(pid, 'raid', `${sim.win ? 'Победа' : 'Поражение'}: набег на ${target.city_name}`, `Потери: ${fmtArmy(lost)}. Добыча: ${fmtRes(loot) || 'нет'}.`);
-  game.addReport(target.id, 'defense', `${sim.win ? 'Город разграблен' : 'Оборона выстояла'}: ${me.username}`, `Потери: ${fmtArmy(tLost)}. Потеряно: ${fmtRes(loot) || 'ничего'}.`);
-  ok(res, { result: { win: sim.win, lost, loot, log: sim.log }, state: game.state(pid) });
-}));
+// ---------- альянсы ----------
+app.get('/api/alliances', auth, wrap((req, res) => ok(res, { alliances: alliances.list() })));
+app.get('/api/alliance/:id', auth, wrap((req, res) => { const a = alliances.info(+req.params.id); if (!a) throw new Error('Нет такого альянса'); ok(res, { alliance: a }); }));
+app.post('/api/alliance/create', auth, wrap((req, res) => ok(res, { state: alliances.create(req.pid, req.body.name, req.body.tag, req.body.description) })));
+app.post('/api/alliance/join', auth, wrap((req, res) => ok(res, { state: alliances.join(req.pid, req.body.id) })));
+app.post('/api/alliance/leave', auth, wrap((req, res) => ok(res, { state: alliances.leave(req.pid) })));
+app.post('/api/alliance/kick', auth, wrap((req, res) => ok(res, { state: alliances.kick(req.pid, req.body.playerId) })));
 
 // ---------- social ----------
 app.get('/api/leaderboard', auth, wrap((req, res) => {
-  const rows = db.prepare('SELECT id,username,city_name FROM players').all().map(p => {
+  const rows = db.prepare('SELECT p.id,p.username,p.city_name,a.tag FROM players p LEFT JOIN alliances a ON a.id=p.alliance_id').all().map(p => {
     const b = game.getBuildings(p.id), u = game.getUnits(p.id), h = game.getHeroes(p.id);
-    return { ...p, power: game.computePower(b, u, h) };
+    return { ...p, power: game.computePower(b, u, h) + (game.getStats(p.id).kills * 5) };
   }).sort((a, b) => b.power - a.power).slice(0, 50);
   ok(res, { players: rows });
 }));
+function chatChannel(req) {
+  if (req.query.channel === 'alliance' || (req.body && req.body.channel === 'alliance')) {
+    const me = game.getPlayer(req.pid);
+    if (!me.alliance_id) throw new Error('Ты не в альянсе');
+    return 'alliance:' + me.alliance_id;
+  }
+  return 'world';
+}
 app.get('/api/chat', auth, wrap((req, res) => {
   const since = +req.query.since || 0;
-  ok(res, { messages: db.prepare('SELECT id,username,text,created_at FROM chat WHERE id>? ORDER BY id DESC LIMIT 50').all(since).reverse() });
+  ok(res, { messages: db.prepare('SELECT id,username,text,created_at FROM chat WHERE id>? AND channel=? ORDER BY id DESC LIMIT 50').all(since, chatChannel(req)).reverse() });
 }));
 app.post('/api/chat', auth, wrap((req, res) => {
   const text = String(req.body.text || '').trim().slice(0, 200);
   if (!text) throw new Error('Пустое сообщение');
   const me = game.getPlayer(req.pid);
-  db.prepare('INSERT INTO chat (player_id,username,text,created_at) VALUES (?,?,?,?)').run(req.pid, me.username, text, game.now());
+  db.prepare('INSERT INTO chat (player_id,username,text,created_at,channel) VALUES (?,?,?,?,?)').run(req.pid, me.username, text, game.now(), chatChannel(req));
   ok(res, {});
 }));
 

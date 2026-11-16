@@ -12,11 +12,35 @@ function getUnits(pid) {
   for (const r of db.prepare('SELECT type,count FROM units WHERE player_id=?').all(pid)) out[r.type] = r.count;
   return out;
 }
+function getItems(pid) { return db.prepare('SELECT * FROM items WHERE player_id=? ORDER BY hero_id, slot, value DESC').all(pid).map(i => ({ ...i, price: G.itemSellPrice(i) })); }
 function getHeroes(pid) {
+  const items = getItems(pid);
   return db.prepare('SELECT * FROM heroes WHERE player_id=? ORDER BY id').all(pid).map(h => {
     const s = G.heroStats(h.class, h.level);
-    return { ...h, ...s, className: G.HERO_CLASSES[h.class].name, nextXp: G.heroXpForLevel(h.level), skill: G.HERO_CLASSES[h.class].skill };
+    const eq = items.filter(i => i.hero_id === h.id);
+    const bonus = { atk: 0, def: 0, hp: 0 };
+    for (const i of eq) bonus[i.stat] += i.value;
+    return { ...h, ...s, atk: s.atk + bonus.atk, def: s.def + bonus.def, hp: s.hp + bonus.hp, baseAtk: s.atk, baseDef: s.def, baseHp: s.hp,
+      className: G.HERO_CLASSES[h.class].name, nextXp: G.heroXpForLevel(h.level), skill: G.HERO_CLASSES[h.class].skill, equipment: eq };
   });
+}
+function getTechs(pid) {
+  const out = {};
+  for (const k in G.TECHS) out[k] = { level: 0, finish_at: null };
+  for (const r of db.prepare('SELECT * FROM research WHERE player_id=?').all(pid)) out[r.tech] = { level: r.level, finish_at: r.finish_at };
+  return out;
+}
+function techLevel(techs, key) { return techs[key] ? techs[key].level : 0; }
+function getWounded(pid) {
+  const out = {};
+  for (const r of db.prepare('SELECT type,count FROM wounded WHERE player_id=? AND count>0').all(pid)) out[r.type] = r.count;
+  return out;
+}
+function getStats(pid) {
+  return db.prepare('SELECT * FROM stats WHERE player_id=?').get(pid) || { kills: 0, boss_kills: 0, gathers: 0, raids: 0 };
+}
+function bumpStat(pid, key, n = 1) {
+  db.prepare(`INSERT INTO stats (player_id, ${key}) VALUES (?, ?) ON CONFLICT(player_id) DO UPDATE SET ${key}=${key}+excluded.${key}`).run(pid, n);
 }
 function levelOf(buildings, type) {
   let m = 0;
@@ -29,24 +53,31 @@ function capacity(buildings) {
   for (const b of buildings) if (b.level > 0) cap += G.buildingCapacity(b.type, b.level);
   return cap;
 }
-function production(buildings) {
+function production(buildings, techs) {
   const p = { food: 0, wood: 0, stone: 0, iron: 0, gold: 0 };
   for (const b of buildings) {
     if (b.level === 0) continue;
     const pr = G.buildingProduction(b.type, b.level);
     for (const k in pr) p[k] += pr[k];
   }
+  const mul = 1 + (techs ? techLevel(techs, 'economy') * G.TECHS.economy.effect : 0);
+  for (const k in p) p[k] = Math.floor(p[k] * mul);
   return p;
 }
-function cityDefense(buildings) {
+function cityDefense(buildings, techs) {
   let d = 0;
   for (const b of buildings) if (b.level > 0) d += G.buildingDefense(b.type, b.level);
-  return d;
+  return Math.floor(d * (1 + (techs ? techLevel(techs, 'defense') * G.TECHS.defense.effect : 0)));
 }
-function atkBonus(buildings) {
+function atkBonus(buildings, techs) {
   const l = levelOf(buildings, 'blacksmith');
-  return 1 + l * G.BUILDINGS.blacksmith.atkBonus;
+  return 1 + l * G.BUILDINGS.blacksmith.atkBonus + (techs ? techLevel(techs, 'military') * G.TECHS.military.effect : 0);
 }
+function defBonus(techs) { return 1 + techLevel(techs, 'defense') * G.TECHS.defense.effect; }
+function speedBonus(techs) { return 1 + techLevel(techs, 'logistics') * G.TECHS.logistics.effect; }
+function carryBonus(techs) { return 1 + techLevel(techs, 'logistics') * G.TECHS.logistics.effect; }
+function woundedRatio(techs) { return Math.min(0.95, 0.5 + techLevel(techs, 'medicine') * G.TECHS.medicine.effect); }
+function hospitalBeds(buildings) { let n = 0; for (const b of buildings) n += G.buildingBeds(b.type, b.level); return n; }
 
 // Ленивое обновление состояния игрока: производство, завершение строек и обучения.
 function tick(pid) {
@@ -61,11 +92,13 @@ function tick(pid) {
     db.prepare('INSERT INTO units (player_id,type,count) VALUES (?,?,?) ON CONFLICT(player_id,type) DO UPDATE SET count=count+excluded.count').run(pid, tr.type, tr.count);
     db.prepare('DELETE FROM training WHERE id=?').run(tr.id);
   }
+  // завершить исследование
+  db.prepare('UPDATE research SET level=level+1, finish_at=NULL WHERE player_id=? AND finish_at IS NOT NULL AND finish_at<=?').run(pid, t);
   // производство
   const buildings = getBuildings(pid);
   const dt = Math.max(0, t - p.last_tick);
   if (dt > 0) {
-    const pr = production(buildings);
+    const pr = production(buildings, getTechs(pid));
     const cap = capacity(buildings);
     const upd = {};
     for (const k of G.RESOURCES) {
@@ -101,25 +134,146 @@ function state(pid) {
   const buildings = getBuildings(pid);
   const heroes = getHeroes(pid);
   const units = getUnits(pid);
+  const techs = getTechs(pid);
   const training = db.prepare('SELECT * FROM training WHERE player_id=? ORDER BY finish_at').all(pid);
-  const power = computePower(buildings, units, heroes);
+  const marches = db.prepare('SELECT * FROM marches WHERE player_id=? ORDER BY id').all(pid).map(m => ({ ...m, army: JSON.parse(m.army), hero_ids: JSON.parse(m.hero_ids), loot: JSON.parse(m.loot), result: m.result ? JSON.parse(m.result) : null }));
+  const power = computePower(buildings, units, heroes, marches);
+  const alliance = p.alliance_id ? db.prepare('SELECT id,name,tag FROM alliances WHERE id=?').get(p.alliance_id) : null;
+  const stats = getStats(pid);
+  const quests = questList(pid, { buildings, units, heroes, techs, stats, alliance });
   return {
     now: now(),
     player: {
       id: p.id, username: p.username, cityName: p.city_name, worldX: p.world_x, worldY: p.world_y,
       resources: { food: Math.floor(p.food), wood: Math.floor(p.wood), stone: Math.floor(p.stone), iron: Math.floor(p.iron), gold: Math.floor(p.gold) },
-      production: production(buildings), capacity: capacity(buildings), defense: cityDefense(buildings), power,
-      atkBonus: atkBonus(buildings),
+      production: production(buildings, techs), capacity: capacity(buildings), defense: cityDefense(buildings, techs), power,
+      atkBonus: atkBonus(buildings, techs), speedBonus: speedBonus(techs), carryBonus: carryBonus(techs),
+      beds: hospitalBeds(buildings), alliance, stats,
+      questsDone: db.prepare('SELECT COUNT(*) c FROM quests_done WHERE player_id=?').get(pid).c,
     },
-    buildings, units, training, heroes,
+    buildings, units, training, heroes, techs, marches, quests,
+    items: getItems(pid).filter(i => !i.hero_id), wounded: getWounded(pid),
     reports: db.prepare('SELECT * FROM reports WHERE player_id=? ORDER BY id DESC LIMIT 20').all(pid),
   };
 }
 
-function computePower(buildings, units, heroes) {
+function questList(pid, ctx) {
+  const done = new Set(db.prepare('SELECT quest_id FROM quests_done WHERE player_id=?').all(pid).map(r => r.quest_id));
+  const items = db.prepare('SELECT hero_id FROM items WHERE player_id=? AND hero_id IS NOT NULL').all(pid).length;
+  const c = {
+    count: (t) => ctx.buildings.filter(b => b.type === t && b.level > 0).length,
+    level: (t) => levelOf(ctx.buildings, t),
+    unitsTotal: () => Object.values(ctx.units).reduce((a, b) => a + b, 0),
+    units: ctx.units, heroes: ctx.heroes.length, kills: ctx.stats.kills, bossKills: ctx.stats.boss_kills, gathers: ctx.stats.gathers,
+    techLevels: Object.values(ctx.techs).reduce((a, t) => a + t.level, 0), equipped: items, alliance: !!ctx.alliance,
+  };
+  const out = [];
+  for (const q of G.QUESTS) {
+    if (done.has(q.id)) continue;
+    let ready = false; try { ready = !!q.check(c); } catch (e) { }
+    out.push({ id: q.id, title: q.title, desc: q.desc, reward: q.reward, ready });
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+function claimQuest(pid, qid) {
+  const st = state(pid);
+  const q = st.quests.find(q => q.id === qid);
+  if (!q) throw new Error('Задание недоступно');
+  if (!q.ready) throw new Error('Задание ещё не выполнено');
+  db.prepare('INSERT OR IGNORE INTO quests_done (player_id, quest_id) VALUES (?,?)').run(pid, qid);
+  const reward = {}; for (const k in q.reward) if (G.RESOURCES.includes(k)) reward[k] = q.reward[k];
+  give(pid, reward, st.buildings);
+  if (q.reward.xpItem) {
+    const it = G.rollItem(5);
+    db.prepare('INSERT INTO items (player_id,slot,tier,rarity,name,stat,value) VALUES (?,?,?,?,?,?,?)').run(pid, it.slot, it.tier, it.rarity, it.name, it.stat, it.value);
+  }
+  return state(pid);
+}
+
+// ---------- академия ----------
+function research(pid, tech) {
+  const def = G.TECHS[tech];
+  if (!def) throw new Error('Нет такой технологии');
+  const p = tick(pid);
+  const bs = getBuildings(pid);
+  const al = levelOf(bs, 'academy');
+  if (al === 0) throw new Error('Построй академию');
+  const techs = getTechs(pid);
+  if (Object.values(techs).some(t => t.finish_at)) throw new Error('Академия занята');
+  const cur = techs[tech].level;
+  if (cur >= def.max) throw new Error('Максимальный уровень');
+  if (cur >= al) throw new Error(`Нужна академия ${cur + 1} ур.`);
+  const cost = G.techCost(tech, cur + 1);
+  if (!canAfford(p, cost)) throw new Error('Не хватает ресурсов');
+  pay(pid, cost);
+  db.prepare('INSERT INTO research (player_id,tech,level,finish_at) VALUES (?,?,?,?) ON CONFLICT(player_id,tech) DO UPDATE SET finish_at=excluded.finish_at')
+    .run(pid, tech, cur, now() + G.techTime(tech, cur + 1));
+  return state(pid);
+}
+
+// ---------- госпиталь ----------
+function addWounded(pid, lost, techs, buildings) {
+  // часть потерь — раненые (если есть койки). Возвращает {dead, wounded}
+  const ratio = woundedRatio(techs);
+  const beds = hospitalBeds(buildings);
+  let used = Object.values(getWounded(pid)).reduce((a, b) => a + b, 0);
+  const wounded = {}, dead = {};
+  for (const t in lost) {
+    let w = Math.floor(lost[t] * ratio);
+    w = Math.max(0, Math.min(w, beds - used)); used += w;
+    if (w > 0) { wounded[t] = w; db.prepare('INSERT INTO wounded (player_id,type,count) VALUES (?,?,?) ON CONFLICT(player_id,type) DO UPDATE SET count=count+excluded.count').run(pid, t, w); }
+    if (lost[t] - w > 0) dead[t] = lost[t] - w;
+  }
+  return { dead, wounded };
+}
+function heal(pid, type, count) {
+  count = Math.floor(Number(count));
+  const w = getWounded(pid);
+  if (!G.UNITS[type] || !(count > 0) || !w[type]) throw new Error('Нет таких раненых');
+  count = Math.min(count, w[type]);
+  const p = tick(pid);
+  const cost = {}; for (const k in G.UNITS[type].cost) cost[k] = Math.ceil(G.UNITS[type].cost[k] * 0.4 * count);
+  if (!canAfford(p, cost)) throw new Error('Не хватает ресурсов');
+  pay(pid, cost);
+  db.prepare('UPDATE wounded SET count=count-? WHERE player_id=? AND type=?').run(count, pid, type);
+  db.prepare('INSERT INTO units (player_id,type,count) VALUES (?,?,?) ON CONFLICT(player_id,type) DO UPDATE SET count=count+excluded.count').run(pid, type, count);
+  return state(pid);
+}
+
+// ---------- предметы ----------
+function equip(pid, itemId, heroId) {
+  const it = db.prepare('SELECT * FROM items WHERE id=? AND player_id=?').get(+itemId, pid);
+  if (!it) throw new Error('Нет предмета');
+  if (heroId) {
+    const h = db.prepare('SELECT id FROM heroes WHERE id=? AND player_id=?').get(+heroId, pid);
+    if (!h) throw new Error('Нет героя');
+    // снять предмет того же слота
+    db.prepare('UPDATE items SET hero_id=NULL WHERE player_id=? AND hero_id=? AND slot=?').run(pid, h.id, it.slot);
+    db.prepare('UPDATE items SET hero_id=? WHERE id=?').run(h.id, it.id);
+  } else db.prepare('UPDATE items SET hero_id=NULL WHERE id=?').run(it.id);
+  return state(pid);
+}
+function sellItem(pid, itemId) {
+  const it = db.prepare('SELECT * FROM items WHERE id=? AND player_id=?').get(+itemId, pid);
+  if (!it) throw new Error('Нет предмета');
+  const bs = getBuildings(pid);
+  const price = Math.floor(G.itemSellPrice(it) * (1 + levelOf(bs, 'blacksmith') * 0.1));
+  db.prepare('DELETE FROM items WHERE id=?').run(it.id);
+  give(pid, { gold: price }, bs);
+  return state(pid);
+}
+function dropItem(pid, level) {
+  const it = G.rollItem(level);
+  db.prepare('INSERT INTO items (player_id,slot,tier,rarity,name,stat,value) VALUES (?,?,?,?,?,?,?)').run(pid, it.slot, it.tier, it.rarity, it.name, it.stat, it.value);
+  return it;
+}
+
+function computePower(buildings, units, heroes, marches) {
   let p = 0;
   for (const b of buildings) p += b.level * 10;
   for (const t in units) p += units[t] * (G.UNITS[t].atk + G.UNITS[t].def);
+  for (const m of marches || []) for (const t in m.army) p += m.army[t] * (G.UNITS[t].atk + G.UNITS[t].def);
   for (const h of heroes) p += h.level * 50;
   return p;
 }
@@ -188,7 +342,7 @@ function train(pid, type, count) {
   if (queue >= 3) throw new Error('Очередь обучения полна');
   pay(pid, cost);
   const last = db.prepare('SELECT MAX(finish_at) m FROM training WHERE player_id=?').get(pid).m || now();
-  const speed = 1 - Math.min(0.5, (bl - 1) * 0.05);
+  const speed = 1 - Math.min(0.6, (bl - 1) * 0.05 + levelOf(bs, 'house') * 0.02);
   const finish = Math.max(last, now()) + Math.ceil(u.time * count * speed);
   db.prepare('INSERT INTO training (player_id,type,count,finish_at) VALUES (?,?,?,?)').run(pid, type, count, finish);
   return state(pid);
@@ -242,6 +396,8 @@ function addReport(pid, kind, title, body) {
 }
 
 module.exports = {
-  now, getPlayer, getBuildings, getUnits, getHeroes, levelOf, capacity, production, cityDefense, atkBonus,
+  now, getPlayer, getBuildings, getUnits, getHeroes, getItems, getTechs, getWounded, getStats, bumpStat, levelOf, capacity, production, cityDefense,
+  atkBonus, defBonus, speedBonus, carryBonus, woundedRatio, hospitalBeds,
   tick, canAfford, pay, give, state, computePower, build, upgrade, demolish, train, recruitHero, addHeroXp, trade, addReport,
+  claimQuest, research, addWounded, heal, equip, sellItem, dropItem,
 };

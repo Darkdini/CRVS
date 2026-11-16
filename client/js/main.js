@@ -14,7 +14,16 @@ const game = {
     this.state = st; this.serverOffset = st.now - Math.floor(Date.now() / 1000);
     this.ui.renderTop();
     // ближайший таймер — обновим после него
-    const times = [...st.buildings.filter(b => b.upgrade_until).map(b => b.upgrade_until), ...st.training.map(t => t.finish_at)];
+    const times = [...st.buildings.filter(b => b.upgrade_until).map(b => b.upgrade_until), ...st.training.map(t => t.finish_at),
+      ...st.marches.map(m => m.status === 'going' ? m.arrive_at : m.status === 'working' ? m.work_until : m.return_at),
+      ...Object.values(st.techs).filter(t => t.finish_at).map(t => t.finish_at)];
+    // новые отчёты → уведомление
+    const top = st.reports[0];
+    if (top && this._lastReport && top.id > this._lastReport) {
+      for (const r of st.reports.filter(r => r.id > this._lastReport).reverse()) this.ui.toast('📜 ' + r.title, r.kind === 'defense' ? 'err' : '');
+      if (this.scene === 'world') this.loadWorld();
+    }
+    if (top) this._lastReport = top.id;
     clearTimeout(this._refreshTimer);
     if (times.length) this._refreshTimer = setTimeout(() => this.refresh(), Math.max(500, (Math.min(...times) - this.now()) * 1000 + 500));
   },
@@ -49,9 +58,17 @@ game.actions = {
   recruitHero: act(() => API.recruitHero(), () => { game.ui.showHeroes(); game.ui.toast('Новый герой в таверне!'); }),
   trade: act((f, t, a) => API.trade(f, t, a), () => { game.ui.showMarket(); game.ui.toast('Обмен выполнен'); }),
   rename: act((n) => API.rename(n), () => game.ui.closePanel()),
-  attackBoss: act((k, a, h) => API.attackBoss(k, a, h), (r) => { game.ui.showBattleResult('Итог боя', r.result); game.loadWorld(); }),
-  attackPlayer: act((id, a, h) => API.attackPlayer(id, a, h), (r) => { game.ui.showBattleResult('Итог набега', r.result); }),
-  gather: act((x, y) => API.gather(x, y), (r) => { game.ui.showBattleResult('Сбор ресурсов', r.result); game.loadWorld(); }),
+  march: act((k, x, y, a, h) => API.march(k, x, y, a, h), () => { game.ui.toast('Армия выступила'); game.ui.showMarches(); }),
+  recall: act((id) => API.recall(id), () => game.ui.showMarches()),
+  equip: act((item, hero) => API.equip(item, hero), (r, item, hero, back) => back ? game.ui.showHero(back) : game.ui.showInventory()),
+  sellItem: act((id) => API.sellItem(id), () => { game.ui.toast('Продано'); game.ui.showInventory(); }),
+  research: act((t) => API.research(t), () => { game.ui.toast('Исследование начато'); game.ui.showAcademy(); }),
+  heal: act((t, n) => API.heal(t, n), () => { game.ui.toast('Вылечены'); game.ui.showHospital(); }),
+  claimQuest: act((id) => API.claimQuest(id), () => { game.ui.toast('Награда получена!'); game.ui.showQuests(); }),
+  allianceCreate: act((n, t, d) => API.allianceCreate(n, t, d), () => game.ui.showAlliance()),
+  allianceJoin: act((id) => API.allianceJoin(id), () => game.ui.showAlliance()),
+  allianceLeave: act(() => API.allianceLeave(), () => game.ui.showAlliance()),
+  allianceKick: act((id) => API.allianceKick(id), () => game.ui.showAlliance()),
 };
 
 async function start(state) {
@@ -64,12 +81,16 @@ async function start(state) {
     const s = b.dataset.scene;
     if (s === 'city' || s === 'world') { game.ui.closePanel(); game.showScene(s); }
     else if (s === 'heroes') game.ui.showHeroes();
-    else if (s === 'army') game.ui.showArmy();
+    else if (s === 'quests') game.ui.showQuests();
     else if (s === 'menu') game.ui.showMenu();
   });
+  $('#btn-quests').onclick = () => game.ui.showQuests();
+  $('#btn-marches').onclick = () => game.ui.showMarches();
+  $('#btn-hospital').onclick = () => game.ui.showHospital();
   $('#btn-center').onclick = () => { const v = game.scene === 'city' ? game.city.view : game.world.view; if (game.scene === 'city') { const c = game.data.citySize / 2 - .5; v.centerOn(c, c); } else v.centerOn(game.state.player.worldX, game.state.player.worldY); };
   game.showScene('city');
-  setInterval(() => game.refresh(), 30000);
+  setInterval(() => game.refresh(), 20000);
+  setInterval(() => { if (game.scene === 'world') game.loadWorld(); }, 15000);
   let last = 0;
   const loop = (ts) => {
     const now = game.now();
@@ -107,4 +128,5 @@ authForm.onsubmit = async (e) => {
   catch (err) { $('#auth-error').textContent = err.message; }
 };
 window.addEventListener('crvs:logout', () => location.reload());
+window.__game = game; // для отладки и автотестов
 boot().catch(e => { $('#loading').textContent = 'Ошибка: ' + e.message; });

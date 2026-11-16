@@ -81,11 +81,69 @@ CREATE TABLE IF NOT EXISTS chat (
   player_id INTEGER NOT NULL, username TEXT NOT NULL,
   text TEXT NOT NULL, created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS monsters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  x INTEGER NOT NULL, y INTEGER NOT NULL,
+  type TEXT NOT NULL, level INTEGER NOT NULL,
+  hp INTEGER NOT NULL, dead_until INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS monsters_xy ON monsters(x, y);
+CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  hero_id INTEGER,
+  slot TEXT NOT NULL, tier INTEGER NOT NULL, rarity TEXT NOT NULL, name TEXT NOT NULL,
+  stat TEXT NOT NULL, value INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS research (
+  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  tech TEXT NOT NULL, level INTEGER NOT NULL DEFAULT 0, finish_at INTEGER,
+  PRIMARY KEY(player_id, tech)
+);
+CREATE TABLE IF NOT EXISTS wounded (
+  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  type TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(player_id, type)
+);
+CREATE TABLE IF NOT EXISTS marches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,            -- monster | boss | player | gather
+  target_x INTEGER NOT NULL, target_y INTEGER NOT NULL,
+  target_id TEXT,                -- id монстра / ключ босса / id игрока
+  army TEXT NOT NULL,            -- JSON {type:count}
+  hero_ids TEXT NOT NULL,        -- JSON [id]
+  status TEXT NOT NULL,          -- going | working | returning
+  depart_at INTEGER NOT NULL, arrive_at INTEGER NOT NULL, work_until INTEGER, return_at INTEGER,
+  travel INTEGER NOT NULL,
+  loot TEXT NOT NULL DEFAULT '{}',
+  result TEXT                    -- JSON итог боя
+);
+CREATE TABLE IF NOT EXISTS quests_done (
+  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  quest_id TEXT NOT NULL,
+  PRIMARY KEY(player_id, quest_id)
+);
+CREATE TABLE IF NOT EXISTS stats (
+  player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+  kills INTEGER NOT NULL DEFAULT 0, boss_kills INTEGER NOT NULL DEFAULT 0, gathers INTEGER NOT NULL DEFAULT 0, raids INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS alliances (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL, tag TEXT UNIQUE NOT NULL,
+  leader_id INTEGER NOT NULL, created_at INTEGER NOT NULL, description TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL
 );
 `);
+
+// миграции для старых баз
+for (const sql of [
+  'ALTER TABLE players ADD COLUMN alliance_id INTEGER',
+  "ALTER TABLE chat ADD COLUMN channel TEXT NOT NULL DEFAULT 'world'",
+]) { try { db.exec(sql); } catch (e) { /* уже есть */ } }
 
 module.exports = db;

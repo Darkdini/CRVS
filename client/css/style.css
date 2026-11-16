@@ -63,3 +63,10 @@ details summary { cursor:pointer; color:var(--gold); }
 #toasts { position:fixed; top:70px; left:0; right:0; display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; z-index:50; }
 .toast { background:rgba(20,15,10,.92); border:1px solid var(--gold); color:#fff; padding:8px 14px; border-radius:8px; opacity:0; transform:translateY(-8px); transition:all .25s; }
 .toast.show { opacity:1; transform:none; } .toast.err { border-color:var(--bad); }
+
+.tbtn { position:relative; background:rgba(0,0,0,.3); border:1px solid #5a4a3a; border-radius:8px; color:#fff; font-size:16px; padding:2px 7px; cursor:pointer; }
+.tbtn i { position:absolute; top:-6px; right:-6px; background:#e04040; color:#fff; font-style:normal; font-size:10px; font-weight:bold; border-radius:9px; min-width:16px; height:16px; line-height:16px; text-align:center; }
+.btn.small { padding:4px 8px; font-size:13px; }
+.card-ico.sm { width:48px; height:48px; } .card-ico.empty { border:1px dashed #6a5a4a; border-radius:8px; }
+h3 { margin:6px 0 2px; color:var(--gold); font-size:15px; }
+.card.col input { width:100%; padding:8px; border-radius:8px; border:1px solid #5a4a3a; background:#1f1812; color:#fff; }

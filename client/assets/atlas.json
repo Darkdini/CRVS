@@ -1,19 +1,197 @@
 {
   "_comment": "Каждый лист — сетка одинаковых квадратных ячеек, прозрачный фон. Кадры перечислены слева направо, сверху вниз. Положи PNG рядом с этим файлом — игра подхватит их автоматически; пока файла нет, рисуется плейсхолдер.",
-  "terrain":   { "file": "terrain.png",   "cols": 4, "rows": 2, "cell": 256, "anchor": "tile",
-                 "frames": ["grass", "dirt", "forest", "mountain", "water", "sand", "swamp", "snow"] },
-  "buildings": { "file": "buildings.png", "cols": 4, "rows": 3, "cell": 256, "anchor": "bottom",
-                 "frames": ["townhall", "farm", "sawmill", "quarry", "mine", "warehouse", "barracks", "tavern", "wall", "tower", "market", "blacksmith"] },
-  "world":     { "file": "world.png",     "cols": 4, "rows": 2, "cell": 256, "anchor": "bottom",
-                 "frames": ["city_player", "city_other", "boss_lair", "forest_node", "stone_node", "iron_node", "gold_node", "farm_node"] },
-  "misc":      { "file": "misc.png",      "cols": 4, "rows": 1, "cell": 256, "anchor": "bottom",
-                 "frames": ["construction", "tree", "rock", "bush"] },
-  "units":     { "file": "units.png",     "cols": 3, "rows": 2, "cell": 256, "anchor": "bottom",
-                 "frames": ["militia", "swordsman", "archer", "knight", "catapult", "scout"] },
-  "heroes":    { "file": "heroes.png",    "cols": 2, "rows": 2, "cell": 512, "anchor": "bottom",
-                 "frames": ["knight", "archer", "mage", "rogue"] },
-  "bosses":    { "file": "bosses.png",    "cols": 3, "rows": 2, "cell": 512, "anchor": "bottom",
-                 "frames": ["troll_king", "wolf_matriarch", "bandit_lord", "lich", "dragon", "demon_lord"] },
-  "icons":     { "file": "icons.png",     "cols": 4, "rows": 2, "cell": 128, "anchor": "center",
-                 "frames": ["food", "wood", "stone", "iron", "gold", "power", "time", "xp"] }
+  "terrain": {
+    "file": "terrain.png",
+    "cols": 4,
+    "rows": 2,
+    "cell": 256,
+    "anchor": "tile",
+    "frames": [
+      "grass",
+      "dirt",
+      "forest",
+      "mountain",
+      "water",
+      "sand",
+      "swamp",
+      "snow"
+    ]
+  },
+  "buildings": {
+    "file": "buildings.png",
+    "cols": 4,
+    "rows": 4,
+    "cell": 256,
+    "anchor": "bottom",
+    "frames": [
+      "townhall",
+      "farm",
+      "sawmill",
+      "quarry",
+      "mine",
+      "warehouse",
+      "barracks",
+      "tavern",
+      "wall",
+      "tower",
+      "market",
+      "blacksmith",
+      "academy",
+      "hospital",
+      "house",
+      "embassy"
+    ]
+  },
+  "world": {
+    "file": "world.png",
+    "cols": 4,
+    "rows": 2,
+    "cell": 256,
+    "anchor": "bottom",
+    "frames": [
+      "city_player",
+      "city_other",
+      "boss_lair",
+      "forest_node",
+      "stone_node",
+      "iron_node",
+      "gold_node",
+      "farm_node"
+    ]
+  },
+  "misc": {
+    "file": "misc.png",
+    "cols": 4,
+    "rows": 2,
+    "cell": 256,
+    "anchor": "bottom",
+    "frames": [
+      "construction",
+      "tree",
+      "rock",
+      "bush",
+      "road",
+      "river",
+      "flag",
+      "camp"
+    ]
+  },
+  "units": {
+    "file": "units.png",
+    "cols": 3,
+    "rows": 2,
+    "cell": 256,
+    "anchor": "bottom",
+    "frames": [
+      "militia",
+      "swordsman",
+      "archer",
+      "knight",
+      "catapult",
+      "scout"
+    ]
+  },
+  "heroes": {
+    "file": "heroes.png",
+    "cols": 2,
+    "rows": 2,
+    "cell": 512,
+    "anchor": "bottom",
+    "frames": [
+      "knight",
+      "archer",
+      "mage",
+      "rogue"
+    ]
+  },
+  "bosses": {
+    "file": "bosses.png",
+    "cols": 3,
+    "rows": 2,
+    "cell": 512,
+    "anchor": "bottom",
+    "frames": [
+      "troll_king",
+      "wolf_matriarch",
+      "bandit_lord",
+      "lich",
+      "dragon",
+      "demon_lord"
+    ]
+  },
+  "monsters": {
+    "file": "monsters.png",
+    "cols": 4,
+    "rows": 4,
+    "cell": 256,
+    "anchor": "bottom",
+    "frames": [
+      "wolf",
+      "boar",
+      "goblin",
+      "bandit",
+      "skeleton",
+      "spider",
+      "orc",
+      "ogre",
+      "harpy",
+      "wraith",
+      "troll",
+      "minotaur",
+      "dark_knight",
+      "hydra",
+      "golem",
+      "demon"
+    ]
+  },
+  "items": {
+    "file": "items.png",
+    "cols": 6,
+    "rows": 4,
+    "cell": 128,
+    "anchor": "center",
+    "frames": [
+      "weapon_0",
+      "armor_0",
+      "helmet_0",
+      "boots_0",
+      "ring_0",
+      "amulet_0",
+      "weapon_1",
+      "armor_1",
+      "helmet_1",
+      "boots_1",
+      "ring_1",
+      "amulet_1",
+      "weapon_2",
+      "armor_2",
+      "helmet_2",
+      "boots_2",
+      "ring_2",
+      "amulet_2",
+      "weapon_3",
+      "armor_3",
+      "helmet_3",
+      "boots_3",
+      "ring_3",
+      "amulet_3"
+    ]
+  },
+  "icons": {
+    "file": "icons.png",
+    "cols": 4,
+    "rows": 2,
+    "cell": 128,
+    "anchor": "center",
+    "frames": [
+      "food",
+      "wood",
+      "stone",
+      "iron",
+      "gold",
+      "power",
+      "time",
+      "xp"
+    ]
+  }
 }

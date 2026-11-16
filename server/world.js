@@ -86,10 +86,58 @@ function generateWorld() {
   console.log('[world] generated', S + 'x' + S);
 }
 
+// Монстры: ~140 штук, уровень растёт от центра карты к краям? Нет — по кольцам от случайных «очагов».
+function spawnMonsters() {
+  const c = db.prepare('SELECT COUNT(*) c FROM monsters').get().c;
+  if (c > 0) return;
+  const S = G.WORLD.size;
+  const rand = mulberry32(777);
+  const occupied = new Set(db.prepare('SELECT x,y FROM world_tiles WHERE object IS NOT NULL').all().map(t => t.x + ',' + t.y));
+  const land = db.prepare("SELECT x,y FROM world_tiles WHERE terrain != 'water'").all();
+  const types = Object.entries(G.MONSTERS);
+  const ins = db.prepare('INSERT INTO monsters (x,y,type,level,hp) VALUES (?,?,?,?,?)');
+  db.exec('BEGIN');
+  let n = 0;
+  for (let i = 0; i < 4000 && n < 140; i++) {
+    const t = land[Math.floor(rand() * land.length)];
+    const k = t.x + ',' + t.y;
+    if (occupied.has(k)) continue;
+    // уровень: 1–20, чаще низкие
+    const level = Math.max(1, Math.min(20, Math.floor(Math.pow(rand(), 1.7) * 20) + 1));
+    const pool = types.filter(([, m]) => m.minLvl <= level);
+    const [type] = pool[Math.floor(rand() * pool.length)];
+    ins.run(t.x, t.y, type, level, G.monsterStats(level).hp);
+    occupied.add(k); n++;
+  }
+  db.exec('COMMIT');
+  console.log('[world] monsters spawned', n);
+}
+
+// Возрождение: мёртвые монстры возвращаются на новую клетку с полным HP
+function respawnMonsters() {
+  const t = Math.floor(Date.now() / 1000);
+  const dead = db.prepare('SELECT * FROM monsters WHERE dead_until>0 AND dead_until<=?').all(t);
+  if (!dead.length) return;
+  const S = G.WORLD.size;
+  const occupied = new Set([
+    ...db.prepare('SELECT x,y FROM world_tiles WHERE object IS NOT NULL').all().map(t => t.x + ',' + t.y),
+    ...db.prepare('SELECT x,y FROM monsters WHERE dead_until=0').all().map(t => t.x + ',' + t.y),
+    ...db.prepare('SELECT world_x x, world_y y FROM players').all().map(t => t.x + ',' + t.y),
+  ]);
+  const land = db.prepare("SELECT x,y FROM world_tiles WHERE terrain != 'water'").all();
+  for (const m of dead) {
+    let spot = { x: m.x, y: m.y };
+    for (let i = 0; i < 50; i++) { const c = land[Math.floor(Math.random() * land.length)]; if (!occupied.has(c.x + ',' + c.y)) { spot = c; break; } }
+    occupied.add(spot.x + ',' + spot.y);
+    db.prepare('UPDATE monsters SET x=?, y=?, hp=?, dead_until=0 WHERE id=?').run(spot.x, spot.y, G.monsterStats(m.level).hp, m.id);
+  }
+}
+
 function findFreeCitySpot() {
   const S = G.WORLD.size;
   const taken = new Set(db.prepare('SELECT world_x x, world_y y FROM players').all().map(p => p.x + ',' + p.y));
-  const rows = db.prepare("SELECT x,y FROM world_tiles WHERE terrain IN ('grass','dirt','sand') AND object IS NULL").all();
+  const mon = new Set(db.prepare('SELECT x,y FROM monsters').all().map(m => m.x + ',' + m.y));
+  const rows = db.prepare("SELECT x,y FROM world_tiles WHERE terrain IN ('grass','dirt','sand') AND object IS NULL").all().filter(r => !mon.has(r.x + ',' + r.y));
   for (let i = 0; i < 2000; i++) {
     const r = rows[Math.floor(Math.random() * rows.length)];
     if (!taken.has(r.x + ',' + r.y)) return r;
@@ -97,4 +145,4 @@ function findFreeCitySpot() {
   return { x: Math.floor(S / 2), y: Math.floor(S / 2) };
 }
 
-module.exports = { generateWorld, findFreeCitySpot };
+module.exports = { generateWorld, findFreeCitySpot, spawnMonsters, respawnMonsters };
