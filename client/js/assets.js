@@ -1,4 +1,5 @@
-// Загрузка спрайт-листов по atlas.json. Если PNG нет — рисуем плейсхолдер.
+// Загрузка спрайт-листов по atlas.json. Если PNG нет — рисуем процедурную заглушку (placeholders.js).
+import * as P from './placeholders.js';
 export const Assets = {
   atlas: null,
   sheets: {},     // name -> {img, def, loaded}
@@ -47,11 +48,12 @@ export const Assets = {
   placeholder(sheet, frame) {
     const key = sheet + '/' + frame;
     if (this.placeholders[key]) return this.placeholders[key];
-    const size = 256;
+    const size = (sheet === 'heroes' || sheet === 'bosses') ? 384 : 256;
     const cv = document.createElement('canvas');
     cv.width = size; cv.height = size;
     const ctx = cv.getContext('2d');
-    PLACEHOLDER[sheet] ? PLACEHOLDER[sheet](ctx, frame, size) : PLACEHOLDER.generic(ctx, frame, size);
+    const fn = { terrain: P.terrain, buildings: P.building, world: P.world, misc: P.misc, units: P.unit, heroes: P.hero, monsters: P.monster, bosses: P.boss, items: P.item, icons: P.icon }[sheet];
+    if (fn) fn(ctx, frame, size); else PLACEHOLDER.generic(ctx, frame, size);
     this.placeholders[key] = cv;
     return cv;
   },

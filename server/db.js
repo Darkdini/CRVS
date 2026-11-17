@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS reports (
 for (const sql of [
   'ALTER TABLE players ADD COLUMN alliance_id INTEGER',
   "ALTER TABLE chat ADD COLUMN channel TEXT NOT NULL DEFAULT 'world'",
+  'ALTER TABLE reports ADD COLUMN data TEXT',
 ]) { try { db.exec(sql); } catch (e) { /* уже есть */ } }
 
 module.exports = db;

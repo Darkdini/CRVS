@@ -4,6 +4,9 @@ import { Assets } from './assets.js';
 import { CityScene } from './city.js';
 import { WorldScene } from './world.js';
 import { UI } from './ui.js';
+import { BattleReplay } from './battlefx.js';
+import { SFX } from './sfx.js';
+import { drawLoginBg } from './loginbg.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -13,6 +16,7 @@ const game = {
   setState(st) {
     this.state = st; this.serverOffset = st.now - Math.floor(Date.now() / 1000);
     this.ui.renderTop();
+    if (this.city) this.city.onState(st);
     // ближайший таймер — обновим после него
     const times = [...st.buildings.filter(b => b.upgrade_until).map(b => b.upgrade_until), ...st.training.map(t => t.finish_at),
       ...st.marches.map(m => m.status === 'going' ? m.arrive_at : m.status === 'working' ? m.work_until : m.return_at),
@@ -20,7 +24,7 @@ const game = {
     // новые отчёты → уведомление
     const top = st.reports[0];
     if (top && this._lastReport && top.id > this._lastReport) {
-      for (const r of st.reports.filter(r => r.id > this._lastReport).reverse()) this.ui.toast('📜 ' + r.title, r.kind === 'defense' ? 'err' : '');
+      for (const r of st.reports.filter(r => r.id > this._lastReport).reverse()) this.ui.toast('📜 ' + r.title, r.kind === 'defense' ? 'err' : '', r.data ? () => this.battle.open(r.data, r.title) : null);
       if (this.scene === 'world') this.loadWorld();
     }
     if (top) this._lastReport = top.id;
@@ -32,6 +36,7 @@ const game = {
     this.scene = name;
     $('#canvas-city').style.display = name === 'city' ? 'block' : 'none';
     $('#canvas-world').style.display = name === 'world' ? 'block' : 'none';
+    $('#scene-title').textContent = name === 'city' ? this.state.player.cityName : 'Мир';
     document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.scene === name));
     if (name === 'world') this.loadWorld();
     this.city.view.resize(); this.world.view.resize();
@@ -47,24 +52,24 @@ function act(fn, after) {
       const r = await fn(...args);
       if (r.state) game.setState(r.state);
       if (after) after(r, ...args); else game.ui.closePanel();
-    } catch (e) { game.ui.toast(e.message, 'err'); }
+    } catch (e) { game.ui.toast(e.message, 'err'); SFX.error(); }
   };
 }
 game.actions = {
-  build: act((t, x, y) => API.build(t, x, y), () => { game.city.buildMode = null; game.ui.closePanel(); game.ui.toast('Стройка начата'); }),
-  upgrade: act((id) => API.upgrade(id), (r, id) => { const b = game.state.buildings.find(b => b.id === id); game.ui.showBuilding(b); }),
+  build: act((t, x, y) => API.build(t, x, y), () => { game.city.buildMode = null; game.ui.closePanel(); game.ui.toast('Стройка начата'); SFX.build(); }),
+  upgrade: act((id) => API.upgrade(id), (r, id) => { const b = game.state.buildings.find(b => b.id === id); game.ui.showBuilding(b); SFX.build(); }),
   demolish: act((id) => API.demolish(id)),
   train: act((t, n) => API.train(t, n), () => { game.ui.showArmy(); game.ui.toast('Обучение начато'); }),
   recruitHero: act(() => API.recruitHero(), () => { game.ui.showHeroes(); game.ui.toast('Новый герой в таверне!'); }),
   trade: act((f, t, a) => API.trade(f, t, a), () => { game.ui.showMarket(); game.ui.toast('Обмен выполнен'); }),
   rename: act((n) => API.rename(n), () => game.ui.closePanel()),
-  march: act((k, x, y, a, h) => API.march(k, x, y, a, h), () => { game.ui.toast('Армия выступила'); game.ui.showMarches(); }),
+  march: act((k, x, y, a, h) => API.march(k, x, y, a, h), () => { game.ui.toast('Армия выступила'); game.ui.showMarches(); SFX.march(); }),
   recall: act((id) => API.recall(id), () => game.ui.showMarches()),
   equip: act((item, hero) => API.equip(item, hero), (r, item, hero, back) => back ? game.ui.showHero(back) : game.ui.showInventory()),
-  sellItem: act((id) => API.sellItem(id), () => { game.ui.toast('Продано'); game.ui.showInventory(); }),
+  sellItem: act((id) => API.sellItem(id), () => { game.ui.toast('Продано'); game.ui.showInventory(); SFX.coin(); }),
   research: act((t) => API.research(t), () => { game.ui.toast('Исследование начато'); game.ui.showAcademy(); }),
   heal: act((t, n) => API.heal(t, n), () => { game.ui.toast('Вылечены'); game.ui.showHospital(); }),
-  claimQuest: act((id) => API.claimQuest(id), () => { game.ui.toast('Награда получена!'); game.ui.showQuests(); }),
+  claimQuest: act((id) => API.claimQuest(id), () => { game.ui.toast('Награда получена!'); game.ui.showQuests(); SFX.coin(); }),
   allianceCreate: act((n, t, d) => API.allianceCreate(n, t, d), () => game.ui.showAlliance()),
   allianceJoin: act((id) => API.allianceJoin(id), () => game.ui.showAlliance()),
   allianceLeave: act(() => API.allianceLeave(), () => game.ui.showAlliance()),
@@ -74,9 +79,11 @@ game.actions = {
 async function start(state) {
   $('#auth').style.display = 'none'; $('#game').style.display = 'flex';
   game.ui = new UI(game);
+  game.battle = new BattleReplay(game);
   game.city = new CityScene($('#canvas-city'), game);
   game.world = new WorldScene($('#canvas-world'), game);
   game.setState(state);
+  $('#backdrop').onclick = () => game.ui.closePanel();
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
     const s = b.dataset.scene;
     if (s === 'city' || s === 'world') { game.ui.closePanel(); game.showScene(s); }
@@ -87,15 +94,16 @@ async function start(state) {
   $('#btn-quests').onclick = () => game.ui.showQuests();
   $('#btn-marches').onclick = () => game.ui.showMarches();
   $('#btn-hospital').onclick = () => game.ui.showHospital();
-  $('#btn-center').onclick = () => { const v = game.scene === 'city' ? game.city.view : game.world.view; if (game.scene === 'city') { const c = game.data.citySize / 2 - .5; v.centerOn(c, c); } else v.centerOn(game.state.player.worldX, game.state.player.worldY); };
+  $('#btn-center').onclick = () => { const v = game.scene === 'city' ? game.city.view : game.world.view; if (game.scene === 'city') { const c = game.data.citySize / 2 - .5; v.panTo(c, c + 1); } else v.panTo(game.state.player.worldX, game.state.player.worldY); };
   game.showScene('city');
   setInterval(() => game.refresh(), 20000);
   setInterval(() => { if (game.scene === 'world') game.loadWorld(); }, 15000);
-  let last = 0;
+  let last = 0, prev = performance.now();
   const loop = (ts) => {
+    const dt = Math.min(0.05, (ts - prev) / 1000); prev = ts;
     const now = game.now();
-    if (game.scene === 'city') game.city.draw(now); else game.world.draw(now);
-    if (ts - last > 1000) { last = ts; game.ui.tickTimers(now); if (game.state) game.ui.renderTop(); predict(); }
+    if (game.scene === 'city') game.city.draw(now, dt); else game.world.draw(now, dt);
+    if (ts - last > 1000) { last = ts; game.ui.tickTimers(now); if (game.state) { predict(); game.ui.renderTop(); } }
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
@@ -110,14 +118,21 @@ function predict() {
 
 // ---------- auth ----------
 async function boot() {
-  $('#loading').textContent = 'Загрузка ресурсов…';
+  const prog = (p, t) => { $('#loading-fill').style.width = p + '%'; $('#loading-text').textContent = t; };
+  prog(10, 'Загрузка графики…');
   await Assets.load();
+  if (Assets.sheets.icons && Assets.sheets.icons.loaded) document.body.classList.add('has-icons');
+  prog(60, 'Загрузка мира…');
   game.data = await API.gamedata();
+  prog(90, 'Почти готово…');
   if (API.token) {
     try { const r = await API.state(); return start(r.state); } catch (e) { API.setToken(null); }
   }
   $('#loading').style.display = 'none'; $('#auth').style.display = 'flex';
+  drawLoginBg($('#login-bg')); window.addEventListener('resize', () => $('#auth').style.display !== 'none' && drawLoginBg($('#login-bg')));
 }
+document.addEventListener('pointerdown', () => SFX.init(), { once: true });
+document.addEventListener('click', (e) => { if (e.target.closest('.btn, #nav button, .tbtn, .card')) SFX.click(); });
 const authForm = $('#auth-form');
 let mode = 'login';
 $('#auth-toggle').onclick = (e) => { e.preventDefault(); mode = mode === 'login' ? 'register' : 'login'; $('#auth-city').style.display = mode === 'register' ? 'block' : 'none'; $('#auth-submit').textContent = mode === 'login' ? 'Войти' : 'Создать город'; $('#auth-toggle').textContent = mode === 'login' ? 'Нет аккаунта? Регистрация' : 'Уже есть аккаунт? Войти'; };
@@ -128,5 +143,6 @@ authForm.onsubmit = async (e) => {
   catch (err) { $('#auth-error').textContent = err.message; }
 };
 window.addEventListener('crvs:logout', () => location.reload());
+game.sfx = SFX;
 window.__game = game; // для отладки и автотестов
 boot().catch(e => { $('#loading').textContent = 'Ошибка: ' + e.message; });

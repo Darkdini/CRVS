@@ -23,26 +23,34 @@ export class UI {
       return `<span class="cost ${bad ? 'bad' : ''}">${this.iconHtml(k)}${v}</span>`;
     }).join(' ');
   }
-  toast(msg, kind = '') {
+  toast(msg, kind = '', onClick) {
     const t = el('div', 'toast ' + kind, esc(msg)); $('#toasts').appendChild(t);
-    setTimeout(() => t.classList.add('show'), 10); setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 2600);
+    if (onClick) { t.style.pointerEvents = 'auto'; t.style.cursor = 'pointer'; t.onclick = () => { onClick(); t.remove(); }; }
+    setTimeout(() => t.classList.add('show'), 10); setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, onClick ? 6000 : 2600);
   }
   openPanel(title, bodyEl) {
     this.panelTitle.textContent = title; this.panelBody.innerHTML = ''; this.panelBody.appendChild(bodyEl);
-    this.panel.classList.add('open'); this.stopChat();
+    this.panel.classList.add('open'); $('#backdrop').classList.add('show'); this.stopChat();
   }
-  closePanel() { this.panel.classList.remove('open'); this.stopChat(); this.game.city.buildMode = null; }
+  closePanel() { this.panel.classList.remove('open'); $('#backdrop').classList.remove('show'); this.stopChat(); this.game.city.buildMode = null; }
   isOpen() { return this.panel.classList.contains('open'); }
 
   // ---------- верхняя панель ----------
   renderTop() {
     const p = this.game.state.player;
-    const bar = $('#resbar'); bar.innerHTML = '';
-    for (const k of this.game.data.resources) {
-      const v = p.resources[k], prod = p.production[k];
+    const bar = $('#resbar');
+    if (!this._prevRes) this._prevRes = {};
+    if (!bar.children.length) for (const k of this.game.data.resources) bar.appendChild(el('div', 'res', `${this.iconHtml(k)}<b></b><small></small><i class="fill"></i>`));
+    this.game.data.resources.forEach((k, i) => {
+      const v = Math.floor(p.resources[k]), prod = p.production[k];
       const full = v >= p.capacity && k !== 'gold';
-      bar.appendChild(el('div', 'res' + (full ? ' full' : ''), `${this.iconHtml(k)}<b>${fmt(v)}</b><small>+${Math.floor(prod)}/ч</small>`));
-    }
+      const d = bar.children[i]; d.classList.toggle('full', full);
+      const b = d.querySelector('b'); if (b.textContent !== fmt(v)) { b.textContent = fmt(v); }
+      if (this._prevRes[k] != null && v > this._prevRes[k] + Math.max(5, prod / 60)) { d.classList.remove('bump'); void d.offsetWidth; d.classList.add('bump'); }
+      this._prevRes[k] = v;
+      d.querySelector('small').textContent = '+' + Math.floor(prod) + '/ч';
+      d.querySelector('.fill').style.width = Math.min(100, 100 * v / p.capacity) + '%';
+    });
     $('#cityname').textContent = p.cityName;
     $('#power').innerHTML = `${this.iconHtml('power')}${p.power}`;
     $('#cap').textContent = 'Склад: ' + fmt(p.capacity);
@@ -59,6 +67,7 @@ export class UI {
     const g = this.game, st = g.state, res = st.player.resources;
     const body = el('div');
     body.appendChild(el('p', 'muted', `Клетка ${x}:${y}. Выбери, что построить.`));
+    if (st.buildings.length < 5) body.appendChild(el('div', 'hint', '💡 Совет: сначала каменоломня и рудник, потом ратуша 2 уровня — она откроет новые здания.'));
     const th = Math.max(...st.buildings.filter(b => b.type === 'townhall').map(b => b.level), 0);
     for (const [key, def] of Object.entries(g.data.buildings)) {
       const have = st.buildings.filter(b => b.type === key).length;
@@ -471,7 +480,11 @@ export class UI {
   stopChat() { if (this.chatTimer) { clearInterval(this.chatTimer); this.chatTimer = null; } }
   showReports() {
     const body = el('div');
-    for (const r of this.game.state.reports) body.appendChild(el('div', 'card col', `<b>${esc(r.title)}</b><div class="small muted">${new Date(r.created_at * 1000).toLocaleString()}</div><div class="small">${esc(r.body)}</div>`));
+    for (const r of this.game.state.reports) {
+      const card = el('div', 'card col', `<b>${esc(r.title)}</b><div class="small muted">${new Date(r.created_at * 1000).toLocaleString()}</div><div class="small">${esc(r.body)}</div>`);
+      if (r.data) { const b = el('button', 'btn small', '▶ Смотреть бой'); b.onclick = () => this.game.battle.open(r.data, r.title); card.appendChild(b); }
+      body.appendChild(card);
+    }
     if (!this.game.state.reports.length) body.appendChild(el('p', 'muted', 'Пока пусто.'));
     this.openPanel('Отчёты', body);
   }
@@ -494,6 +507,7 @@ export class UI {
     add('🏆 Рейтинг', () => this.showLeaderboard());
     add('💬 Чат мира', () => this.showChat());
     add('✏ Переименовать город', async () => { const n = prompt('Новое имя города', g.state.player.cityName); if (n) g.actions.rename(n); });
+    add((g.sfx.muted ? '🔇 Включить звук' : '🔊 Выключить звук'), () => { g.sfx.toggle(); this.showMenu(); });
     add('🚪 Выйти', () => g.logout());
     body.appendChild(el('p', 'small muted', 'Crowns & Ruins v0.1'));
     this.openPanel('Меню', body);

@@ -8,23 +8,23 @@
 <link rel="icon" href="data:,">
 </head>
 <body>
-<div id="loading">Загрузка…</div>
+<div id="loading"><div>CROWNS &amp; RUINS</div><div class="bar"><i id="loading-fill"></i></div><div id="loading-text" style="font-size:13px;color:#c3b08e;font-family:Nunito,sans-serif">Загрузка…</div></div>
 
-<div id="auth" style="display:none">
-  <form id="auth-form" class="auth-box">
+<div id="auth" style="display:none"><canvas id="login-bg"></canvas>
+  <form id="auth-form" class="auth-box wood">
     <h1>Crowns &amp; Ruins</h1>
-    <p class="muted">Средневековая стратегия. Строй город, собирай героев, бей боссов в общем мире.</p>
-    <input id="auth-user" placeholder="Имя (3–16 символов)" autocomplete="username" required>
+    <div class="tag">Построй столицу · собери героев · покори мир</div>
+    <input id="auth-user" placeholder="Имя правителя (3–16)" autocomplete="username" required>
     <input id="auth-pass" type="password" placeholder="Пароль" autocomplete="current-password" required>
-    <input id="auth-city" placeholder="Название города (необязательно)" style="display:none">
+    <input id="auth-city" placeholder="Название столицы (необязательно)" style="display:none">
     <div id="auth-error" class="bad"></div>
     <button id="auth-submit" class="btn primary" type="submit">Войти</button>
-    <a href="#" id="auth-toggle">Нет аккаунта? Регистрация</a>
+    <a href="#" id="auth-toggle">Нет аккаунта? Основать королевство</a>
   </form>
 </div>
 
 <div id="game" style="display:none">
-  <header id="top">
+  <header id="top" class="wood">
     <div id="resbar"></div>
     <div id="topinfo"><span id="cityname"></span><span id="cap" class="muted small"></span><span id="power"></span>
       <button class="tbtn" id="btn-hospital" title="Госпиталь" style="display:none">🏥</button>
@@ -34,13 +34,17 @@
   <main id="stage">
     <canvas id="canvas-city"></canvas>
     <canvas id="canvas-world" style="display:none"></canvas>
+    <div id="vignette"></div>
+    <div id="scene-title">Столица</div>
     <button id="btn-center" title="Центрировать">⌖</button>
-    <aside id="panel">
+    <div id="backdrop"></div>
+    <aside id="panel" class="wood">
       <div id="panel-head"><span id="panel-title"></span><button id="panel-close">✕</button></div>
       <div id="panel-body"></div>
     </aside>
+    <div id="battle"><div class="title" id="battle-title"></div><canvas id="battle-canvas"></canvas><button class="btn primary" id="battle-skip">Пропустить</button></div>
   </main>
-  <nav id="nav">
+  <nav id="nav" class="wood">
     <button data-scene="city">🏰<span>Город</span></button>
     <button data-scene="world">🗺<span>Мир</span></button>
     <button data-scene="heroes">🛡<span>Герои</span></button>

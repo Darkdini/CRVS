@@ -1,12 +1,13 @@
 // Сцена общего мира: местность, города, монстры, боссы, ресурсы, походы.
 import { Assets } from './assets.js';
 import { IsoView } from './iso.js';
+import { FX } from './fx.js';
 
 export class WorldScene {
   constructor(canvas, game) {
     this.game = game;
     this.view = new IsoView(canvas, { tileW: 96, zoom: 0.8, minZoom: 0.3, maxZoom: 2 });
-    this.world = null; this.selected = null; this.hover = null;
+    this.world = null; this.selected = null; this.hover = null; this.fx = new FX(); this.time = 0;
     this.view.onTap = (t) => this.tap(t);
     this.view.onHover = (t) => { this.hover = t; };
   }
@@ -39,10 +40,11 @@ export class WorldScene {
     else f = Math.max(0, Math.min(1, (m.return_at - now) / m.travel));
     return { x: homeX + (m.target_x - homeX) * f, y: homeY + (m.target_y - homeY) * f, f };
   }
-  draw(now) {
+  draw(now, dt) {
     const v = this.view, c = v.ctx;
+    this.time += dt; v.update(dt); this.fx.update(dt);
     v.begin();
-    c.fillStyle = '#1d2a3a'; c.fillRect(0, 0, v.w, v.h);
+    const bg = c.createLinearGradient(0, 0, 0, v.h); bg.addColorStop(0, '#1b2838'); bg.addColorStop(1, '#0f1722'); c.fillStyle = bg; c.fillRect(0, 0, v.w, v.h);
     if (!this.world) return;
     const S = this.world.size, tw = v.tileW * v.zoom;
     const b = v.visibleBounds(S);
@@ -53,9 +55,11 @@ export class WorldScene {
       Assets.draw(c, 'terrain', t.terrain, p.x, p.y, tw, tw);
     }
     if (this.hover) v.diamond(this.hover.x, this.hover.y, 'rgba(255,255,255,.15)');
-    if (this.selected) v.diamond(this.selected.x, this.selected.y, 'rgba(255,220,80,.3)', '#ffd84a');
+    if (this.selected) { const a = .2 + .15 * Math.sin(this.time * 5); v.diamond(this.selected.x, this.selected.y, `rgba(255,220,80,${a})`, '#ffd84a'); }
     const me = this.game.state.player;
     v.diamond(me.worldX, me.worldY, null, '#ffe680');
+    // бой: пульс у цели активных походов
+    for (const m of (this.game.state.marches || [])) if (m.status !== 'returning') { const a = .15 + .1 * Math.sin(this.time * 6); v.diamond(m.target_x, m.target_y, `rgba(255,90,60,${a})`); }
     // линии походов
     const marches = this.game.state.marches || [];
     c.setLineDash([6 * v.zoom, 6 * v.zoom]);
@@ -83,8 +87,9 @@ export class WorldScene {
         }
       } else if (o.kind === 'boss') {
         const bs = o.boss; const alive = bs.dead_until <= now;
+        if (alive) { const g = c.createRadialGradient(p.x, p.y, 2, p.x, p.y, tw * .8); g.addColorStop(0, `rgba(255,60,60,${.25 + .1 * Math.sin(this.time * 3)})`); g.addColorStop(1, 'rgba(255,60,60,0)'); c.fillStyle = g; c.beginPath(); c.arc(p.x, p.y, tw * .8, 0, 7); c.fill(); }
         c.globalAlpha = alive ? 1 : 0.4;
-        Assets.draw(c, 'bosses', bs.key, p.x, baseY, tw * 1.3, tw * 1.3);
+        Assets.draw(c, 'bosses', bs.key, p.x, baseY - (alive ? Math.abs(Math.sin(this.time * 2 + e.x)) * 3 * v.zoom : 0), tw * 1.3, tw * 1.3);
         c.globalAlpha = 1;
         if (v.zoom > 0.45) {
           label(c, `☠ ${bs.name}`, p.x, p.y - tw * 0.85, 11 * fs, '#ffb3b3');
@@ -92,7 +97,8 @@ export class WorldScene {
         }
       } else if (o.kind === 'monster') {
         const m = o.monster;
-        Assets.draw(c, 'monsters', m.type, p.x, baseY, tw * 0.85, tw * 0.85);
+        const bob = Math.abs(Math.sin(this.time * 3 + e.x * 1.7 + e.y)) * 2.5 * v.zoom;
+        Assets.draw(c, 'monsters', m.type, p.x, baseY - bob, tw * 0.85, tw * 0.85);
         if (v.zoom > 0.5) {
           badge(c, p.x, p.y - tw * 0.6, m.level, m.level <= 5 ? '#4caf50' : m.level <= 12 ? '#ff9800' : '#e53935', fs);
           if (m.hp < m.maxHp) bar(c, p.x, p.y - tw * 0.48, tw * 0.5, m.hp / m.maxHp, '#e04040');
@@ -105,13 +111,16 @@ export class WorldScene {
       } else if (o.kind === 'march') {
         const m = o.march;
         const unit = o.mine ? slowest(m.army, this.game.data.units) : 'scout';
-        Assets.draw(c, 'units', unit, p.x, baseY, tw * 0.55, tw * 0.55);
+        const step = m.status === 'working' ? 0 : Math.abs(Math.sin(this.time * 10)) * 3 * v.zoom;
+        if (m.status !== 'working' && Math.random() < dt * 6) this.fx.emit(e.x, e.y, { spread: .3, up: .2, life: .8, size: 2.5, grow: 2, color: 'rgba(200,180,140,.5)' });
+        Assets.draw(c, 'units', unit, p.x, baseY - step, tw * 0.55, tw * 0.55);
         if (o.mine) {
           const left = m.status === 'going' ? m.arrive_at - now : m.status === 'working' ? m.work_until - now : m.return_at - now;
           label(c, (m.status === 'going' ? '→ ' : m.status === 'working' ? '⛏ ' : '← ') + fmtShort(left), p.x, p.y - tw * 0.5, 10 * fs, '#fff');
         } else if (v.zoom > 0.7) label(c, m.username, p.x, p.y - tw * 0.45, 9 * fs, '#ddd');
       }
     }
+    this.fx.draw(c, (x, y) => v.toScreen(x, y), v.zoom);
   }
 }
 function slowest(army, units) { let best = null, s = Infinity; for (const t in army) if (army[t] > 0 && units[t].speed < s) { s = units[t].speed; best = t; } return best || 'scout'; }

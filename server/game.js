@@ -153,7 +153,7 @@ function state(pid) {
     },
     buildings, units, training, heroes, techs, marches, quests,
     items: getItems(pid).filter(i => !i.hero_id), wounded: getWounded(pid),
-    reports: db.prepare('SELECT * FROM reports WHERE player_id=? ORDER BY id DESC LIMIT 20').all(pid),
+    reports: db.prepare('SELECT * FROM reports WHERE player_id=? ORDER BY id DESC LIMIT 20').all(pid).map(r => ({ ...r, data: r.data ? JSON.parse(r.data) : null })),
   };
 }
 
@@ -390,8 +390,8 @@ function trade(pid, from, to, amount) {
   return state(pid);
 }
 
-function addReport(pid, kind, title, body) {
-  db.prepare('INSERT INTO reports (player_id,kind,title,body,created_at) VALUES (?,?,?,?,?)').run(pid, kind, title, body, now());
+function addReport(pid, kind, title, body, data) {
+  db.prepare('INSERT INTO reports (player_id,kind,title,body,created_at,data) VALUES (?,?,?,?,?,?)').run(pid, kind, title, body, now(), data ? JSON.stringify(data) : null);
   db.prepare('DELETE FROM reports WHERE player_id=? AND id NOT IN (SELECT id FROM reports WHERE player_id=? ORDER BY id DESC LIMIT 30)').run(pid, pid);
 }
 

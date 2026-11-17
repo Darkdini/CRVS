@@ -133,6 +133,7 @@ function arrive(m) {
     const a = battle.armyStats(m.army, heroes, atkMul * (heroes.some(h => h.class === 'mage') ? 1.15 : 1));
     a.def *= game.defBonus(techs);
     const sim = battle.simulate(a, { atk: ms.atk, def: ms.def, hp: mon.hp }, 10);
+    const armyBefore = { ...m.army };
     const lossRatio = a.hp > 0 ? 1 - sim.aLeft / a.hp : 0;
     const { lost, dead, wounded } = applyLosses(m, lossRatio);
     const xpGain = Math.floor(ms.xp * Math.min(1, sim.aDamageDealt / ms.hp)) + 10;
@@ -152,9 +153,9 @@ function arrive(m) {
       db.prepare('UPDATE monsters SET hp=? WHERE id=?').run(Math.max(1, sim.bLeft), mon.id);
       if (lossRatio > 0.6) for (const h of heroes) db.prepare('UPDATE heroes SET injured_until=? WHERE id=?').run(t + 300, h.id);
     }
-    const result = { kind: 'monster', target: name, win: sim.win, damage: sim.aDamageDealt, lost, dead, wounded, loot, item, xpGain, levelUps, log: sim.log };
+    const result = { kind: 'monster', target: name, enemySprite: { sheet: 'monsters', frame: mon.type }, army: armyBefore, heroes: heroes.map(h => h.class), win: sim.win, damage: sim.aDamageDealt, lost, dead, wounded, loot, item, xpGain, levelUps, log: sim.log, aHp: a.hp, bHp: mon.hp };
     game.addReport(pid, 'monster', `${sim.win ? 'Победа' : 'Поражение'}: ${name}`,
-      `Урон ${sim.aDamageDealt}. Погибло: ${fmtArmy(dead)}. Ранено: ${fmtArmy(wounded)}. Добыча: ${fmtRes(loot)}.${item ? ` Трофей: ${item.name} (${item.rarity}).` : ''} Опыт +${xpGain}.`);
+      `Урон ${sim.aDamageDealt}. Погибло: ${fmtArmy(dead)}. Ранено: ${fmtArmy(wounded)}. Добыча: ${fmtRes(loot)}.${item ? ` Трофей: ${item.name} (${item.rarity}).` : ''} Опыт +${xpGain}.`, result);
     return startReturn(m, loot, result);
   }
   if (m.kind === 'boss') {
@@ -164,6 +165,7 @@ function arrive(m) {
     const a = battle.armyStats(m.army, heroes, atkMul * (heroes.some(h => h.class === 'mage') ? 1.3 : 1));
     a.def *= game.defBonus(techs);
     const sim = battle.simulate(a, { atk: bossDef.atk, def: bossDef.def, hp: boss.hp }, 8);
+    const armyBefore = { ...m.army }, bossHpBefore = boss.hp;
     const lossRatio = a.hp > 0 ? 1 - sim.aLeft / a.hp : 0;
     const { lost, dead, wounded } = applyLosses(m, lossRatio);
     if (lossRatio > 0.6) for (const h of heroes) db.prepare('UPDATE heroes SET injured_until=? WHERE id=?').run(t + 300, h.id);
@@ -191,9 +193,9 @@ function arrive(m) {
       db.prepare('DELETE FROM boss_damage WHERE boss_key=?').run(m.target_id);
       db.prepare("INSERT INTO chat (player_id,username,text,created_at,channel) VALUES (0,?,?,?,'world')").run('Герольд', `${me.username} сразил босса «${bossDef.name}»!`, t);
     } else db.prepare('UPDATE bosses SET hp=? WHERE key=?').run(newHp, m.target_id);
-    const result = { kind: 'boss', target: bossDef.name, win: sim.win, killed, damage: sim.aDamageDealt, bossHpLeft: Math.max(0, newHp), bossMaxHp: bossDef.hp, lost, dead, wounded, loot: reward, item, xpGain, levelUps, log: sim.log };
+    const result = { kind: 'boss', target: bossDef.name, enemySprite: { sheet: 'bosses', frame: m.target_id }, army: armyBefore, heroes: heroes.map(h => h.class), win: sim.win, killed, damage: sim.aDamageDealt, bossHpLeft: Math.max(0, newHp), bossMaxHp: bossDef.hp, lost, dead, wounded, loot: reward, item, xpGain, levelUps, log: sim.log, aHp: a.hp, bHp: bossHpBefore };
     game.addReport(pid, 'boss', killed ? `Босс ${bossDef.name} повержен!` : `Бой с ${bossDef.name}`,
-      `Урон ${sim.aDamageDealt}. Погибло: ${fmtArmy(dead)}. Ранено: ${fmtArmy(wounded)}. Опыт +${xpGain}.` + (killed ? ` Награда: ${fmtRes(reward)}. Трофей: ${item.name}.` : ''));
+      `Урон ${sim.aDamageDealt}. Погибло: ${fmtArmy(dead)}. Ранено: ${fmtArmy(wounded)}. Опыт +${xpGain}.` + (killed ? ` Награда: ${fmtRes(reward)}. Трофей: ${item.name}.` : ''), result);
     return startReturn(m, reward, result);
   }
   if (m.kind === 'player') {
@@ -209,6 +211,7 @@ function arrive(m) {
     const wallDef = game.cityDefense(tb, tTechs);
     d.def = d.def * game.defBonus(tTechs) + wallDef; d.hp += wallDef * 5;
     const sim = battle.simulate(a, d, 10);
+    const armyBefore = { ...m.army }, tArmyBefore = { ...tArmy };
     const myLoss = a.hp > 0 ? 1 - sim.aLeft / a.hp : 0;
     const theirLoss = d.hp > 0 ? 1 - sim.bLeft / d.hp : 0;
     const { lost, dead, wounded } = applyLosses(m, myLoss);
@@ -226,9 +229,10 @@ function arrive(m) {
     }
     for (const h of heroes) game.addHeroXp(h.id, 40 + (sim.win ? 60 : 0));
     db.prepare('UPDATE players SET attacked_at=? WHERE id=?').run(t, target.id);
-    const result = { kind: 'player', target: target.city_name, win: sim.win, lost, dead, wounded, loot, log: sim.log };
-    game.addReport(pid, 'raid', `${sim.win ? 'Победа' : 'Поражение'}: набег на ${target.city_name}`, `Погибло: ${fmtArmy(dead)}. Ранено: ${fmtArmy(wounded)}. Добыча: ${fmtRes(loot)}.`);
-    game.addReport(target.id, 'defense', `${sim.win ? 'Город разграблен' : 'Оборона выстояла'}: ${me.username}`, `Погибло: ${fmtArmy(tw.dead)}. Ранено: ${fmtArmy(tw.wounded)}. Потеряно: ${fmtRes(loot)}.`);
+    const result = { kind: 'player', target: target.city_name, enemySprite: { sheet: 'world', frame: 'city_other' }, army: armyBefore, enemyArmy: tArmyBefore, heroes: heroes.map(h => h.class), win: sim.win, lost, dead, wounded, loot, log: sim.log, aHp: a.hp, bHp: d.hp };
+    game.addReport(pid, 'raid', `${sim.win ? 'Победа' : 'Поражение'}: набег на ${target.city_name}`, `Погибло: ${fmtArmy(dead)}. Ранено: ${fmtArmy(wounded)}. Добыча: ${fmtRes(loot)}.`, result);
+    const dres = { kind: 'defense', target: me.username, enemySprite: { sheet: 'world', frame: 'city_other' }, army: tArmyBefore, enemyArmy: armyBefore, heroes: tHeroes.map(h => h.class), win: !sim.win, lost: tLost, dead: tw.dead, wounded: tw.wounded, loot: {}, log: sim.log.map(l => ({ round: l.round, dealt: l.taken, taken: l.dealt, ahp: l.bhp, bhp: l.ahp })), aHp: d.hp, bHp: a.hp };
+    game.addReport(target.id, 'defense', `${sim.win ? 'Город разграблен' : 'Оборона выстояла'}: ${me.username}`, `Погибло: ${fmtArmy(tw.dead)}. Ранено: ${fmtArmy(tw.wounded)}. Потеряно: ${fmtRes(loot)}.`, dres);
     return startReturn(m, loot, result);
   }
 }
